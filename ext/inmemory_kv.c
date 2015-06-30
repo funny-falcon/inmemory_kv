@@ -775,6 +775,15 @@ rb_kv_init_copy(VALUE self, VALUE orig) {
 	return self;
 }
 
+static VALUE
+rb_kv_clear(VALUE self) {
+	inmemory_kv* kv;
+	GetKV(self, kv);
+	kv_destroy(kv);
+	memset(kv, 0, sizeof(*kv));
+	return self;
+}
+
 void
 Init_inmemory_kv() {
 	VALUE mod_inmemory_kv, cls_str2str;
@@ -805,5 +814,6 @@ Init_inmemory_kv() {
 	rb_define_method(cls_str2str, "each", rb_kv_each, 0);
 	rb_define_method(cls_str2str, "inspect", rb_kv_inspect, 0);
 	rb_define_method(cls_str2str, "initialize_copy", rb_kv_init_copy, 1);
+	rb_define_method(cls_str2str, "clear", rb_kv_clear, 0);
 	rb_include_module(cls_str2str, rb_mEnumerable);
 }

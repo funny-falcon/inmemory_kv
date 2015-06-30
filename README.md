@@ -32,6 +32,9 @@ Or install it yourself as:
 ```ruby
 s2s = InMemoryKV::Str2Str.new
 s2s['asdf'] = 'qwer'
+s2s.size
+s2s.count
+s2s.empty?
 s2s.keys
 s2s.values
 s2s.entries
@@ -47,6 +50,7 @@ s2s.first # first/oldest entry in LRU
 s2s.shift # shift oldest entry
 s2s.data_size # size of key+value entries
 s2s.total_size # size of key+value entries + internal structures
+s2s.clear
 
 # Str2Str is more memory efficient than storing string in a builtin hash
 # also it is a bit faster.
