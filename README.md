@@ -7,7 +7,7 @@ with LRU built in (a lot like builtin Hash).
 
 It doesn't participate in GC and not encounted in. It uses `malloc` for simplicity.
 
-If you do not clone and not mutate it in a fork, than it is as fork-frienly as your malloc is.
+If you do not clone and not mutate it in a fork, than it is as fork-friendly as your malloc is.
 
 It is not thread-safe, so protect it by you self. (builtin hash is also not thread-safe)
 
