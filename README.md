@@ -5,6 +5,10 @@ This is simple off-gc in-memory hash table.
 Currently, `InMemoryKV::Str2Str` is a string to string hash table
 with LRU built in (a lot like builtin Hash).
 
+It doesn't participate in GC and not encounted in. It uses `malloc` for simplicity.
+
+If you do not clone and not mutate it in a fork, than it is as fork-frienly as your malloc is.
+
 ## Installation
 
 Add this line to your application's Gemfile:
@@ -43,12 +47,14 @@ s2s.data_size # size of key+value entries
 s2s.total_size # size of key+value entries + internal structures
 
 # Str2Str is more memory efficient than storing string in a builtin hash
-# also it is a bit faster
-# it tries to overwrite value inplace if it has size not larger
+# also it is a bit faster.
+# It tries to overwrite value inplace if it value's size not larger.
 def timeit; t=Time.now; r=yield; ensure puts "Lasts: #{Time.now - t}"; r; end
 
 timeit{ 1000000.times{|i| s2s[i.to_s] = "qwer#{i}"} }
+timeit{ 1000000.times{|i| s2s[i.to_s] = "qwer#{i}"} }
 hsh = {}
+timeit{ 1000000.times{|i| hsh[i.to_s] = "qwer#{i}"} }
 timeit{ 1000000.times{|i| hsh[i.to_s] = "qwer#{i}"} }
 
 # cloning is made to be very fast:
@@ -57,6 +63,12 @@ timeit{ 1000000.times{|i| hsh[i.to_s] = "qwer#{i}"} }
 # key/value's reference count is incremented
 timeit{ sts.dup }
 timeit{ hsh.dup }
+# clone is copy on write
+cpy = sts.dup
+sts['2'] = '!'
+cpy['3'] = '!!'
+sts['2'] != cpy['2']
+sts['3'] != cpy['3']
 ```
 
 ## Contributing
