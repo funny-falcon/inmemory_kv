@@ -9,6 +9,8 @@ It doesn't participate in GC and not encounted in. It uses `malloc` for simplici
 
 If you do not clone and not mutate it in a fork, than it is as fork-frienly as your malloc is.
 
+It is not thread-safe, so protect it by you self. (builtin hash is also not thread-safe)
+
 ## Installation
 
 Add this line to your application's Gemfile:
