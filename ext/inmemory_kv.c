@@ -310,12 +310,14 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 	if (item == NULL) {
 #ifdef HAVE_MALLOC_USABLE_SIZE
 		item = malloc(sizeof(*item) + key_size + val_size);
+		assert(item);
 		item->rc = 0;
 		item->val_size_max = malloc_usable_size(item) - sizeof(*item) - key_size;
 #else
 		u32 val_size_max = sizeof(*item) + key_size + val_size;
 		val_size_max = (val_size_max + 15) & 15;
 		item = malloc(sizeof(*item) + key_size + val_size_max);
+		assert(item);
 		item->rc = 0;
 		item->val_size_max = val_size_max;
 #endif
