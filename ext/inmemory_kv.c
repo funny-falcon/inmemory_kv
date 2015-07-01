@@ -14,9 +14,11 @@ typedef unsigned int u32;
 typedef struct hash_item {
 	u32 pos;
 	u32 rc;
+#ifndef HAVE_MALLOC_USABLE_SIZE
+	u32 item_size;
+#endif
 	u32 key_size;
 	u32 val_size;
-	u32 val_size_max;
 	char key[0];
 } hash_item;
 
@@ -24,6 +26,18 @@ static inline char*
 item_val(hash_item* item) {
 	return item->key + item->key_size;
 }
+
+#ifdef HAVE_MALLOC_USABLE_SIZE
+static inline size_t
+item_size(hash_item* item) {
+	return malloc_usable_size(item);
+}
+#else
+static inline size_t
+item_size(hash_item* item) {
+	return item->item_size;
+}
+#endif
 
 typedef struct hash_entry {
 	u32 hash;
@@ -297,9 +311,12 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 		pos = hash_insert(&kv->tab, hash);
 		item = NULL;
 	} else {
+		u32 have_size, need_size;
 		hash_up(&kv->tab, pos);
-		if (val_size > item->val_size_max || item->rc > 0) {
-			kv->total_size -= item->key_size + item->val_size_max + sizeof(*item);
+		have_size = item_size(item);
+		need_size = sizeof(*item) + key_size + val_size;
+		if (need_size > have_size || need_size < have_size/2 || item->rc > 0) {
+			kv->total_size -= have_size;
 			if (item->rc > 0)
 				item->rc--;
 			else
@@ -308,20 +325,21 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 		}
 	}
 	if (item == NULL) {
+		u32 new_size;
 #ifdef HAVE_MALLOC_USABLE_SIZE
 		item = malloc(sizeof(*item) + key_size + val_size);
 		assert(item);
+		new_size = malloc_usable_size(item);
 		item->rc = 0;
-		item->val_size_max = malloc_usable_size(item) - sizeof(*item) - key_size;
 #else
-		u32 val_size_max = sizeof(*item) + key_size + val_size;
-		val_size_max = (val_size_max + 15) & 15;
-		item = malloc(sizeof(*item) + key_size + val_size_max);
+		new_size = sizeof(*item) + key_size + val_size;
+		new_size = (new_size + 15) & 15;
+		item = malloc(new_size);
 		assert(item);
 		item->rc = 0;
-		item->val_size_max = val_size_max;
+		item->item_size = new_size;
 #endif
-		kv->total_size += key_size + item->val_size_max + sizeof(*item);
+		kv->total_size += new_size;
 		item->key_size = key_size;
 		item->pos = pos;
 		memcpy(item->key, key, key_size);
@@ -362,7 +380,7 @@ kv_down(inmemory_kv *kv, hash_item* item) {
 static void
 kv_delete(inmemory_kv *kv, hash_item* item) {
 	hash_delete(&kv->tab, item->pos);
-	kv->total_size -= sizeof(*item) + item->key_size + item->val_size_max;
+	kv->total_size -= item_size(item);
 	if (item->rc > 0) {
 		item->rc--;
 	} else {
