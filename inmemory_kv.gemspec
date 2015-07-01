@@ -8,9 +8,9 @@ Gem::Specification.new do |spec|
   spec.version       = InMemoryKV::VERSION
   spec.authors       = ["Sokolov Yura aka funny_falcon"]
   spec.email         = ["funny.falcon@gmail.com"]
-  spec.summary       = %q{Simple in memory string/string hash}
-  spec.description   = %q{Simple in memory string/string hash}
-  spec.homepage      = ""
+  spec.summary       = %q{Simple in memory string/string hash without GC presure}
+  spec.description   = %q{Simple in memory string/string hash which does not participate in GC and not encounted in}
+  spec.homepage      = "https://github.com/funny-falcon/inmemory_kv"
   spec.license       = "MIT"
 
   spec.files         = `git ls-files -z`.split("\x0")
