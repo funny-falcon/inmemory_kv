@@ -76,7 +76,7 @@ item_set_sizes(hash_item* item, u32 key_size, u32 val_size) {
 
 static inline void
 item_set_val_size(hash_item* item, u32 val_size) {
-	assert( (val_size > 255) == (item->big == 1));
+	assert(val_size <= 255 || item->big == 1);
 	if (item->big) {
 		item->kind.big.val_size = val_size;
 	} else {
