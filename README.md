@@ -59,9 +59,15 @@ def timeit; t=Time.now; r=yield; ensure puts "Lasts: #{Time.now - t}"; r; end
 
 timeit{ 1000000.times{|i| s2s[i.to_s] = "qwer#{i}"} }
 timeit{ 1000000.times{|i| s2s[i.to_s] = "qwer#{i}"} }
+timeit{ GC.start }
+timeit{ GC.start }
+
+# Compare with classic hash
 hsh = {}
 timeit{ 1000000.times{|i| hsh[i.to_s] = "qwer#{i}"} }
 timeit{ 1000000.times{|i| hsh[i.to_s] = "qwer#{i}"} }
+timeit{ GC.start }
+timeit{ GC.start }
 
 # cloning is made to be very fast:
 # it does not copy key/value entries
