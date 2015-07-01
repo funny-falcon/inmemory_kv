@@ -166,7 +166,7 @@ hash_unchain(hash_table* tab, u32 pos) {
 
 static void
 hash_up(hash_table* tab, u32 pos) {
-	assert(tab->entries[pos].hash != 0);
+	assert(tab->entries[pos].item != NULL);
 	if (tab->last == pos+1) return;
 	hash_unchain(tab, pos);
 	hash_enchain(tab, pos);
@@ -174,7 +174,7 @@ hash_up(hash_table* tab, u32 pos) {
 
 static void
 hash_down(hash_table* tab, u32 pos) {
-	assert(tab->entries[pos].hash != 0);
+	assert(tab->entries[pos].item != NULL);
 	if (tab->first == pos+1) return;
 	hash_unchain(tab, pos);
 	hash_enchain_first(tab, pos);
@@ -201,7 +201,7 @@ hash_insert(hash_table* tab, u32 hash) {
 		free(tab->buckets);
 		tab->buckets = calloc(new_nbuckets, sizeof(u32));
 		for (i=0; i<tab->alloced; i++) {
-			if (tab->entries[i].hash == 0)
+			if (tab->entries[i].item == NULL)
 				continue;
 			buc = tab->entries[i].hash % new_nbuckets;
 			npos = tab->buckets[buc];
@@ -246,6 +246,7 @@ hash_delete(hash_table* tab, u32 pos) {
 	hash_unchain(tab, i);
 	tab->empty = i+1;
 	tab->entries[i].hash = 0;
+	tab->entries[i].item = NULL;
 	tab->size--;
 }
 
@@ -274,8 +275,7 @@ static void kv_copy_to(inmemory_kv *from, inmemory_kv *to);
 #ifdef HAV_RB_MEMHASH
 static inline u32
 kv_hash(const char* key, u32 key_size) {
-	u32 hash = rb_memhash(key, key_size);
-	return hash ? hash : ~(u32)0;
+	return rb_memhash(key, key_size);
 }
 #else
 static inline u32
@@ -288,8 +288,7 @@ kv_hash(const char* key, u32 key_size) {
 		a2 = (a2 ^ k) * 9;
 	}
 	a1 ^= key_size; a1 *= 5; a2 *= 9;
-	a1 ^= a2;
-	return a1 ? a1 : ~(u32)0;
+	return a1 ^ a2;
 }
 #endif
 
@@ -410,7 +409,7 @@ static void
 kv_destroy(inmemory_kv *kv) {
 	u32 i;
 	for (i=0; i<kv->tab.alloced; i++) {
-		if (kv->tab.entries[i].hash != 0) {
+		if (kv->tab.entries[i].item != NULL) {
 			hash_item* item = kv->tab.entries[i].item;
 			if (item->rc > 0) {
 				item->rc--;
@@ -435,7 +434,7 @@ kv_copy_to(inmemory_kv *from, inmemory_kv *to) {
 		memcpy(to->tab.buckets, from->tab.buckets,
 				sizeof(u32)*from->tab.nbuckets);
 		for (i=0; i<to->tab.alloced; i++) {
-			if (to->tab.entries[i].hash != 0) {
+			if (to->tab.entries[i].item != NULL) {
 				to->tab.entries[i].item->rc++;
 			}
 		}
