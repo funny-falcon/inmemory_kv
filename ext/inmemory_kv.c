@@ -2,6 +2,7 @@
 #include <ruby/intern.h>
 #include <assert.h>
 #include <malloc.h>
+#include <stddef.h>
 
 #include <stdio.h>
 #ifdef HAV_STDLIB_H
@@ -10,22 +11,28 @@
 #include <string.h>
 
 typedef unsigned int u32;
+typedef unsigned char u8;
 
 typedef struct hash_item {
 	u32 pos;
-	u32 rc;
+	u32 rc : 31;
+	u32 big : 1;
 #ifndef HAVE_MALLOC_USABLE_SIZE
 	u32 item_size;
 #endif
-	u32 key_size;
-	u32 val_size;
-	char key[0];
+	union {
+		struct {
+			u8 key_size;
+			u8 val_size;
+			char key[0];
+		} small;
+		struct {
+			u32 key_size;
+			u32 val_size;
+			char key[0];
+		} big;
+	} kind;
 } hash_item;
-
-static inline char*
-item_val(hash_item* item) {
-	return item->key + item->key_size;
-}
 
 #ifdef HAVE_MALLOC_USABLE_SIZE
 static inline size_t
@@ -38,6 +45,76 @@ item_size(hash_item* item) {
 	return item->item_size;
 }
 #endif
+
+static inline int
+item_need_big(u32 key_size, u32 val_size) {
+	return key_size > 255 || val_size > 255;
+}
+
+static inline u32
+item_key_size(hash_item* item) {
+	return item->big ? item->kind.big.key_size : item->kind.small.key_size;
+}
+
+static inline u32
+item_val_size(hash_item* item) {
+	return item->big ? item->kind.big.val_size : item->kind.small.val_size;
+}
+
+static inline void
+item_set_sizes(hash_item* item, u32 key_size, u32 val_size) {
+	if (item_need_big(key_size, val_size)) {
+		item->big = 1;
+		item->kind.big.key_size = key_size;
+		item->kind.big.val_size = val_size;
+	} else {
+		item->big = 0;
+		item->kind.small.key_size = key_size;
+		item->kind.small.val_size = val_size;
+	}
+}
+
+static inline void
+item_set_val_size(hash_item* item, u32 val_size) {
+	assert( (val_size > 255) == (item->big == 1));
+	if (item->big) {
+		item->kind.big.val_size = val_size;
+	} else {
+		item->kind.small.val_size = val_size;
+	}
+}
+
+static inline char*
+item_key(hash_item* item) {
+	return item->big ? item->kind.big.key : item->kind.small.key;
+}
+
+static inline char*
+item_val(hash_item* item) {
+	return item_key(item) + item_key_size(item);
+}
+
+static inline u32
+item_need_size(u32 key_size, u32 val_size) {
+	if (item_need_big(key_size, val_size)) {
+		return offsetof(hash_item, kind.big.key) + key_size + val_size;
+	} else {
+		return offsetof(hash_item, kind.small.key) + key_size + val_size;
+	}
+}
+
+static inline int
+item_compatible(hash_item* item, u32 val_size) {
+	u32 key_size, need_size, have_size;
+	key_size = item_key_size(item);
+	if (item->big != item_need_big(key_size, val_size))
+		return 0;
+	need_size = item_need_size(key_size, val_size);
+	have_size = item_size(item);
+	if (need_size > have_size || need_size < have_size/2)
+		return 0;
+	return 1;
+}
 
 typedef struct hash_entry {
 	u32 hash;
@@ -300,8 +377,8 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 	pos = hash_hash_first(&kv->tab, hash);
 	while (pos != end) {
 		item = kv->tab.entries[pos].item;
-		if (item->key_size == key_size &&
-				memcmp(key, item->key, key_size) == 0) {
+		if (item_key_size(item) == key_size &&
+				memcmp(key, item_key(item), key_size) == 0) {
 			break;
 		}
 		pos = hash_hash_next(&kv->tab, hash, pos);
@@ -310,12 +387,9 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 		pos = hash_insert(&kv->tab, hash);
 		item = NULL;
 	} else {
-		u32 have_size, need_size;
 		hash_up(&kv->tab, pos);
-		have_size = item_size(item);
-		need_size = sizeof(*item) + key_size + val_size;
-		if (need_size > have_size || need_size < have_size/2 || item->rc > 0) {
-			kv->total_size -= have_size;
+		if (!item_compatible(item, val_size) || item->rc > 0) {
+			kv->total_size -= item_size(item);
 			if (item->rc > 0)
 				item->rc--;
 			else
@@ -324,26 +398,25 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 		}
 	}
 	if (item == NULL) {
-		u32 new_size;
+		u32 new_size = item_need_size(key_size, val_size);
 #ifdef HAVE_MALLOC_USABLE_SIZE
-		item = malloc(sizeof(*item) + key_size + val_size);
+		item = malloc(new_size);
 		assert(item);
 		new_size = malloc_usable_size(item);
 		item->rc = 0;
 #else
-		new_size = sizeof(*item) + key_size + val_size;
-		new_size = (new_size + 15) & 15;
+		new_size = (new_size + 7) & 7;
 		item = malloc(new_size);
 		assert(item);
 		item->rc = 0;
 		item->item_size = new_size;
 #endif
 		kv->total_size += new_size;
-		item->key_size = key_size;
+		item_set_sizes(item, key_size, val_size);
 		item->pos = pos;
-		memcpy(item->key, key, key_size);
+		memcpy(item_key(item), key, key_size);
 	}
-	item->val_size = val_size;
+	item_set_val_size(item, val_size);
 	memcpy(item_val(item), val, val_size);
 	kv->tab.entries[pos].item = item;
 	return item;
@@ -357,8 +430,8 @@ kv_fetch(inmemory_kv *kv, const char* key, u32 key_size) {
 	pos = hash_hash_first(&kv->tab, hash);
 	while (pos != end) {
 		item = kv->tab.entries[pos].item;
-		if (item->key_size == key_size &&
-				memcmp(key, item->key, key_size) == 0) {
+		if (item_key_size(item) == key_size &&
+				memcmp(key, item_key(item), key_size) == 0) {
 			break;
 		}
 		pos = hash_hash_next(&kv->tab, hash, pos);
@@ -472,6 +545,16 @@ rb_kv_alloc(VALUE klass) {
 	return TypedData_Wrap_Struct(klass, &InMemoryKV_data_type, kv);
 }
 
+static inline VALUE
+item_key_str(hash_item* item) {
+	return rb_str_new(item_key(item), item_key_size(item));
+}
+
+static inline VALUE
+item_val_str(hash_item* item) {
+	return rb_str_new(item_val(item), item_val_size(item));
+}
+
 static VALUE
 rb_kv_get(VALUE self, VALUE vkey) {
 	inmemory_kv* kv;
@@ -485,7 +568,7 @@ rb_kv_get(VALUE self, VALUE vkey) {
 	size = RSTRING_LEN(vkey);
 	item = kv_fetch(kv, key, size);
 	if (item == NULL) return Qnil;
-	return rb_str_new(item_val(item), item->val_size);
+	return item_val_str(item);
 }
 
 static VALUE
@@ -502,7 +585,7 @@ rb_kv_up(VALUE self, VALUE vkey) {
 	item = kv_fetch(kv, key, size);
 	if (item == NULL) return Qnil;
 	kv_up(kv, item);
-	return rb_str_new(item_val(item), item->val_size);
+	return item_val_str(item);
 }
 
 static VALUE
@@ -519,7 +602,7 @@ rb_kv_down(VALUE self, VALUE vkey) {
 	item = kv_fetch(kv, key, size);
 	if (item == NULL) return Qnil;
 	kv_down(kv, item);
-	return rb_str_new(item_val(item), item->val_size);
+	return item_val_str(item);
 }
 
 static VALUE
@@ -568,7 +651,7 @@ rb_kv_del(VALUE self, VALUE vkey) {
 	size = RSTRING_LEN(vkey);
 	item = kv_fetch(kv, key, size);
 	if (item == NULL) return Qnil;
-	res = rb_str_new(item_val(item), item->val_size);
+	res = item_val_str(item);
 	kv_delete(kv, item);
 	return res;
 }
@@ -582,8 +665,8 @@ rb_kv_first(VALUE self) {
 	GetKV(self, kv);
 	item = kv_first(kv);
 	if (item == NULL) return Qnil;
-	key = rb_str_new(item->key, item->key_size);
-	val = rb_str_new(item_val(item), item->val_size);
+	key = item_key_str(item);
+	val = item_val_str(item);
 	return rb_assoc_new(key, val);
 }
 
@@ -596,8 +679,8 @@ rb_kv_shift(VALUE self) {
 	GetKV(self, kv);
 	item = kv_first(kv);
 	if (item == NULL) return Qnil;
-	key = rb_str_new(item->key, item->key_size);
-	val = rb_str_new(item_val(item), item->val_size);
+	key = item_key_str(item);
+	val = item_val_str(item);
 	kv_delete(kv, item);
 	return rb_assoc_new(key, val);
 }
@@ -654,21 +737,21 @@ rb_kv_total_size(VALUE self) {
 static void
 keys_i(hash_item* item, void* arg) {
 	VALUE ary = (VALUE)arg;
-	rb_ary_push(ary, rb_str_new(item->key, item->key_size));
+	rb_ary_push(ary, item_key_str(item));
 }
 
 static void
 vals_i(hash_item* item, void* arg) {
 	VALUE ary = (VALUE)arg;
-	rb_ary_push(ary, rb_str_new(item_val(item), item->val_size));
+	rb_ary_push(ary, item_val_str(item));
 }
 
 static void
 pairs_i(hash_item* item, void* arg) {
 	VALUE ary = (VALUE)arg;
 	VALUE key, val;
-	key = rb_str_new(item->key, item->key_size);
-	val = rb_str_new(item_val(item), item->val_size);
+	key = item_key_str(item);
+	val = item_val_str(item);
 	rb_ary_push(ary, rb_assoc_new(key, val));
 }
 
@@ -704,19 +787,19 @@ rb_kv_entries(VALUE self) {
 
 static void
 key_i(hash_item* item, void* _ __attribute__((unused))) {
-	rb_yield(rb_str_new(item->key, item->key_size));
+	rb_yield(item_key_str(item));
 }
 
 static void
 val_i(hash_item* item, void* _ __attribute__((unused))) {
-	rb_yield(rb_str_new(item_val(item), item->val_size));
+	rb_yield(item_val_str(item));
 }
 
 static void
 pair_i(hash_item* item, void* _ __attribute__((unused))) {
 	VALUE key, val;
-	key = rb_str_new(item->key, item->key_size);
-	val = rb_str_new(item_val(item), item->val_size);
+	key = item_key_str(item);
+	val = item_val_str(item);
 	rb_yield(rb_assoc_new(key, val));
 }
 
@@ -754,14 +837,14 @@ static void
 inspect_i(hash_item* item, void* arg) {
 	struct inspect_arg* a = arg;
 	VALUE ins;
-	rb_str_cat(a->tmp, item->key, item->key_size);
+	rb_str_cat(a->tmp, item_key(item), item_key_size(item));
 	ins = rb_inspect(a->tmp);
 	rb_str_cat(a->str, " ", 1);
 	rb_str_cat(a->str, RSTRING_PTR(ins), RSTRING_LEN(ins));
 	rb_str_cat(a->str, "=>", 2);
 	rb_str_resize(ins, 0);
 	rb_str_resize(a->tmp, 0);
-	rb_str_buf_cat(a->tmp, item_val(item), item->val_size);
+	rb_str_buf_cat(a->tmp, item_val(item), item_val_size(item));
 	ins = rb_inspect(a->tmp);
 	rb_str_append(a->str, ins);
 	rb_str_resize(ins, 0);
