@@ -262,9 +262,11 @@ hash_insert(hash_table* tab, u32 hash) {
 	u32 i, pos, buc, npos;
 	if (tab->size == tab->alloced) {
 		u32 new_alloced = tab->alloced ? tab->alloced * 1.5 : 32;
-		tab->entries = realloc(tab->entries,
+		hash_entry* new_entries = realloc(tab->entries,
 				sizeof(hash_entry)*new_alloced);
-		assert(tab->entries);
+		if (new_entries == NULL)
+			return end;
+		tab->entries = new_entries;
 		memset(tab->entries + tab->alloced, 0,
 				sizeof(hash_entry)*(new_alloced - tab->alloced));
 		for (i=tab->alloced; i<new_alloced-1; i++) {
@@ -275,8 +277,11 @@ hash_insert(hash_table* tab, u32 hash) {
 	}
 	if (tab->size >= tab->nbuckets * 2) {
 		u32 new_nbuckets = tab->nbuckets ? (tab->nbuckets+1)*2-1 : 15;
+		u32* new_buckets = calloc(new_nbuckets, sizeof(u32));
+		if (new_buckets == NULL)
+			return end;
 		free(tab->buckets);
-		tab->buckets = calloc(new_nbuckets, sizeof(u32));
+		tab->buckets = new_buckets;
 		for (i=0; i<tab->alloced; i++) {
 			if (tab->entries[i].item == NULL)
 				continue;
@@ -373,7 +378,7 @@ static hash_item*
 kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 val_size) {
 	u32 hash = kv_hash(key, key_size);
 	u32 pos;
-	hash_item* item;
+	hash_item *item, *old_item = NULL;
 	pos = hash_hash_first(&kv->tab, hash);
 	while (pos != end) {
 		item = kv->tab.entries[pos].item;
@@ -385,15 +390,13 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 	}
 	if (pos == end) {
 		pos = hash_insert(&kv->tab, hash);
+		if (pos == end)
+			return NULL;
 		item = NULL;
 	} else {
 		hash_up(&kv->tab, pos);
 		if (!item_compatible(item, val_size) || item->rc > 0) {
-			kv->total_size -= item_size(item);
-			if (item->rc > 0)
-				item->rc--;
-			else
-				free(item);
+			old_item = item;
 			item = NULL;
 		}
 	}
@@ -401,16 +404,24 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 		u32 new_size = item_need_size(key_size, val_size);
 #ifdef HAVE_MALLOC_USABLE_SIZE
 		item = malloc(new_size);
-		assert(item);
+		if (item == NULL)
+			return NULL;
 		new_size = malloc_usable_size(item);
-		item->rc = 0;
 #else
 		new_size = (new_size + 7) & 7;
 		item = malloc(new_size);
-		assert(item);
-		item->rc = 0;
+		if (item == NULL)
+			return NULL;
 		item->item_size = new_size;
 #endif
+		if (old_item != NULL) {
+			kv->total_size -= item_size(old_item);
+			if (old_item->rc > 0)
+				old_item->rc--;
+			else
+				free(old_item);
+		}
+		item->rc = 0;
 		kv->total_size += new_size;
 		item_set_sizes(item, key_size, val_size);
 		item->pos = pos;
@@ -632,7 +643,9 @@ rb_kv_set(VALUE self, VALUE vkey, VALUE vval) {
 	val = RSTRING_PTR(vval);
 	vsize = RSTRING_LEN(vval);
 
-	kv_insert(kv, key, ksize, val, vsize);
+	if (kv_insert(kv, key, ksize, val, vsize) == NULL) {
+		rb_raise(rb_eNoMemError, "could not malloc");
+	}
 
 	return vval;
 }
@@ -701,6 +714,9 @@ rb_kv_unshift(VALUE self, VALUE vkey, VALUE vval) {
 	vsize = RSTRING_LEN(vval);
 
 	item = kv_insert(kv, key, ksize, val, vsize);
+	if (item == NULL) {
+		rb_raise(rb_eNoMemError, "could not malloc");
+	}
 	kv_down(kv, item);
 
 	return vval;
