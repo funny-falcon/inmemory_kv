@@ -90,3 +90,6 @@ sts['3'] != cpy['3']
 3. Commit your changes (`git commit -am 'Add some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
 5. Create a new Pull Request
+
+## Changelog
+0.1.5 - raise error on memory allocation failure
