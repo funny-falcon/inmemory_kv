@@ -402,16 +402,19 @@ kv_insert(inmemory_kv *kv, const char* key, u32 key_size, const char* val, u32 v
 	}
 	if (item == NULL) {
 		u32 new_size = item_need_size(key_size, val_size);
-#ifdef HAVE_MALLOC_USABLE_SIZE
+#ifndef HAVE_MALLOC_USABLE_SIZE
+		new_size = (new_size + 7) & 7;
+#endif
 		item = malloc(new_size);
-		if (item == NULL)
+		if (item == NULL) {
+			if (old_item == NULL) {
+				hash_delete(&kv->tab, pos);
+			}
 			return NULL;
+		}
+#ifdef HAVE_MALLOC_USABLE_SIZE
 		new_size = malloc_usable_size(item);
 #else
-		new_size = (new_size + 7) & 7;
-		item = malloc(new_size);
-		if (item == NULL)
-			return NULL;
 		item->item_size = new_size;
 #endif
 		if (old_item != NULL) {
