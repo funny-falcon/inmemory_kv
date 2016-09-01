@@ -103,6 +103,14 @@ item_need_size(u32 key_size, u32 val_size) {
 	}
 }
 
+static void
+item_release(hash_item* item) {
+	if (item->rc)
+		item->rc--;
+	else
+		free(item);
+}
+
 static inline int
 item_compatible(hash_item* item, u32 val_size) {
 	u32 key_size, need_size, have_size;
@@ -124,8 +132,45 @@ typedef struct hash_entry {
 	hash_item* item;
 } hash_entry;
 
+typedef struct hash_entries {
+	u32 rc;
+	u32 cnt;
+	hash_entry entry[1];
+} hash_entries;
+
+static hash_entries*
+entry2entries(hash_entry* en) {
+	return (hash_entries*)((char*)en - offsetof(hash_entries, entry));
+}
+
+static void
+release_entries(hash_entry* en) {
+	hash_entries* ens = entry2entries(en);
+	if (ens->rc) {
+		ens->rc--;
+	} else {
+		for (u32 i = 0; i < ens->cnt; i++) {
+			if (en[i].item)
+				item_release(en[i].item);
+		}
+		free(entry2entries(en));
+	}
+}
+
+static void
+free_entries(hash_entry* en) {
+	hash_entries* ens = entry2entries(en);
+	if (ens->rc) {
+		ens->rc--;
+	} else {
+		free(entry2entries(en));
+	}
+}
+
+#define ENTRIES_CHUNK 128
 typedef struct hash_table {
-	hash_entry* entries;
+	hash_entry** entries;
+	hash_entry* small;
 	u32* buckets;
 	u32  size;
 	u32  alloced;
@@ -163,14 +208,19 @@ hash_next(hash_table* tab, u32 pos) {
 	return tab->entries[pos].fwd - 1;
 }
 
+static hash_entry*
+hash_entry_at(hash_table* tab, u32 pos) {
+	return &tab->entries[pos/ENTRIES_CHUNK][pos%ENTRIES_CHUNK];
+}
+
 static u32
 hash_hash_first(hash_table* tab, u32 hash) {
 	u32 buc, pos;
 	if (tab->size == 0) return end;
 	buc = hash % tab->nbuckets;
 	pos = tab->buckets[buc] - 1;
-	while (pos != end && tab->entries[pos].hash != hash) {
-		pos = tab->entries[pos].next - 1;
+	while (pos != end && hash_entry_at(tab, pos)->hash != hash) {
+		pos = hash_entry_at(tab, pos)->next - 1;
 	}
 	return pos;
 }
@@ -179,8 +229,8 @@ static u32
 hash_hash_next(hash_table* tab, u32 hash, u32 pos) {
 	if (pos == end || tab->size == 0) return end;
 	do {
-		pos = tab->entries[pos].next - 1;
-	} while (pos != end && tab->entries[pos].hash != hash);
+		pos = hash_entry_at(tab, pos)->next - 1;
+	} while (pos != end && hash_entry_at(tab, pos)->hash != hash);
 	return pos;
 }
 
@@ -202,11 +252,11 @@ hash_print(hash_table* tab, const char* act, u32 pos) {
 
 static inline void
 hash_enchain(hash_table* tab, u32 pos) {
-	tab->entries[pos].prev = tab->last;
+	hash_entry_at(tab, pos)->prev = tab->last;
 	if (tab->first == 0) {
 		tab->first = pos+1;
 	} else {
-		tab->entries[tab->last-1].fwd = pos+1;
+		hash_entry_at(tab, tab->last-1)->fwd = pos+1;
 	}
 	tab->last = pos+1;
 	hash_print(tab, "enchain", pos);
@@ -214,11 +264,11 @@ hash_enchain(hash_table* tab, u32 pos) {
 
 static inline void
 hash_enchain_first(hash_table* tab, u32 pos) {
-	tab->entries[pos].fwd = tab->first;
+	hash_entry_at(tab, pos)->fwd = tab->first;
 	if (tab->last == 0) {
 		tab->last = pos+1;
 	} else {
-		tab->entries[tab->first-1].prev = pos+1;
+		hash_entry_at(tab, tab->first-1)->prev = pos+1;
 	}
 	tab->first = pos+1;
 	hash_print(tab, "enchain first", pos);
@@ -226,18 +276,19 @@ hash_enchain_first(hash_table* tab, u32 pos) {
 
 static inline void
 hash_unchain(hash_table* tab, u32 pos) {
+	hash_entry* cur = hash_entry_at(tab, pos);
 	if (tab->first == pos+1) {
-		tab->first = tab->entries[pos].fwd;
+		tab->first = cur->fwd;
 	} else {
-		tab->entries[tab->entries[pos].prev-1].fwd = tab->entries[pos].fwd;
+		hash_entry_at(tab, cur->prev-1)->fwd = cur->fwd;
 	}
 	if (tab->last == pos+1) {
-		tab->last = tab->entries[pos].prev;
+		tab->last = cur->prev;
 	} else {
-		tab->entries[tab->entries[pos].fwd-1].prev = tab->entries[pos].prev;
+		tab->entries[cur->fwd-1].prev = cur->prev;
 	}
-	tab->entries[pos].fwd = 0;
-	tab->entries[pos].prev = 0;
+	cur->fwd = 0;
+	cur->prev = 0;
 	hash_print(tab, "unchain", pos);
 }
 
